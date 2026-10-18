@@ -19,13 +19,14 @@ mod report;
 #[path = "selective_reliability/wire.rs"]
 mod wire;
 
-use bitmap::{run_bitmap_sample, MAX_TRACKED_BITMAP_FLIGHTS};
+use bitmap::{run_bitmap_sample, run_minimal_bitmap_sample, MAX_TRACKED_BITMAP_FLIGHTS};
 use harness::{fixture, run_sample};
-use report::{print_bitmap_triplet, print_pair};
+use report::{print_bitmap_triplet, print_minimal_triplet, print_pair};
 use wire::{
-    decode_bitmap_ack, decode_envelope, encode_bitmap_ack, encode_envelope, stable_id, BitmapAck,
-    BitmapAckEntry, FaultKey, FaultProfile, Mode, WireKey, DATA, MAX_FRAMES_PER_FLIGHT,
-    MAX_PENDING_FRAMES, TRACKED_RECEIVER_FLIGHTS,
+    decode_bitmap_ack, decode_envelope, decode_minimal_envelope, encode_bitmap_ack,
+    encode_envelope, encode_minimal_envelope, stable_id, BitmapAck, BitmapAckEntry, FaultKey,
+    FaultProfile, Mode, WireKey, DATA, MAX_FRAMES_PER_FLIGHT, MAX_PENDING_FRAMES,
+    TRACKED_RECEIVER_FLIGHTS,
 };
 
 #[tokio::test]
@@ -128,6 +129,53 @@ async fn bitmap_ack_vs_per_frame_ack() {
     }
 }
 
+#[tokio::test]
+#[ignore = "100k-entry minimal reliability wire sweep; run explicitly in one-off CI"]
+async fn minimal_wire_vs_bitmap() {
+    let fixture = fixture();
+    let profiles = [
+        ("clean", FaultProfile::clean(0xb000), 4u64),
+        ("loss_0_1", FaultProfile::data_loss(0xc000, 10), 8),
+        ("loss_1", FaultProfile::data_loss(0xd000, 100), 8),
+        ("loss_5", FaultProfile::data_loss(0xe000, 500), 8),
+        ("mixed", FaultProfile::mixed(0xf000), 8),
+    ];
+    for budget in [1_200, 1_472] {
+        for (name, base, trials) in profiles {
+            let mut exercised = [0usize; 4];
+            for trial in 0..trials {
+                let profile = base.with_scenario(base.scenario + trial);
+                let control = run_sample(&fixture, Mode::Control, budget, profile).await;
+                let bitmap = run_bitmap_sample(&fixture, budget, profile).await;
+                let minimal = run_minimal_bitmap_sample(&fixture, budget, profile).await;
+                print_minimal_triplet(budget, name, profile.scenario, &control, &bitmap, &minimal);
+                assert!(control.converged, "control failed: {name} {trial}");
+                assert!(bitmap.converged, "bitmap failed: {name} {trial}");
+                assert!(minimal.converged, "minimal wire failed: {name} {trial}");
+                assert!(minimal.metrics.max_pending_frames <= MAX_PENDING_FRAMES);
+                assert!(
+                    minimal.metrics.max_seen_ids
+                        <= MAX_TRACKED_BITMAP_FLIGHTS * MAX_FRAMES_PER_FLIGHT
+                );
+                assert!(minimal.metrics.max_receiver_flights <= MAX_TRACKED_BITMAP_FLIGHTS);
+                assert!(minimal.metrics.stale_rejected <= minimal.metrics.stale_injected);
+                if name == "mixed" {
+                    exercised[0] += minimal.metrics.control_fault_drops;
+                    exercised[1] += minimal.metrics.fault_duplicates;
+                    exercised[2] += minimal.metrics.fault_reorders;
+                    exercised[3] += minimal.metrics.stale_rejected;
+                }
+            }
+            if name == "mixed" {
+                assert!(
+                    exercised.iter().all(|count| *count > 0),
+                    "minimal mixed scenario must exercise ACK loss, duplication, reorder and stale"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn envelope_and_fault_identity_are_stable() {
     let key = WireKey {
@@ -141,6 +189,15 @@ fn envelope_and_fault_identity_are_stable() {
     assert_eq!(kind, DATA);
     assert_eq!(decoded, key);
     assert_eq!(payload, b"payload");
+
+    let minimal = encode_minimal_envelope(DATA, key, b"payload");
+    let (minimal_kind, minimal_key, minimal_payload) = decode_minimal_envelope(&minimal).unwrap();
+    assert_eq!(minimal_kind, DATA);
+    assert_eq!(minimal_key.epoch, key.epoch);
+    assert_eq!(minimal_key.flight, key.flight);
+    assert_eq!(minimal_key.slot, key.slot);
+    assert_eq!(minimal_key.semantic, stable_id(b"payload"));
+    assert_eq!(minimal_payload, b"payload");
 
     let bitmap_ack = BitmapAck {
         epoch: 7,

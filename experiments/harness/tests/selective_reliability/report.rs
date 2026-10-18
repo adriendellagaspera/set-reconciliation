@@ -131,3 +131,66 @@ fn shared_data_drops(left: &Sample, right: &Sample) -> usize {
         .filter(|key| key.kind == DATA)
         .count()
 }
+
+pub(super) fn print_minimal_triplet(
+    budget: usize,
+    name: &str,
+    scenario: u64,
+    control: &Sample,
+    bitmap: &Sample,
+    minimal: &Sample,
+) {
+    let control_bytes = control.metrics.first_data_bytes;
+    let bitmap_bytes =
+        bitmap.metrics.first_data_bytes + bitmap.metrics.control_bytes + bitmap.metrics.retry_bytes;
+    let minimal_bytes = minimal.metrics.first_data_bytes
+        + minimal.metrics.control_bytes
+        + minimal.metrics.retry_bytes;
+    let bitmap_minimal_shared = shared_data_drops(bitmap, minimal);
+    println!(
+        "[minimal] budget={budget} profile={name} scenario={scenario:#x} control_converged={} bitmap_converged={} minimal_converged={} control_ms={} bitmap_ms={} minimal_ms={} control_bytes={} bitmap_bytes={} minimal_bytes={} control_useful_bytes={} bitmap_useful_bytes={} minimal_useful_bytes={} bitmap_data_bytes={} minimal_data_bytes={} bitmap_control_bytes={} minimal_control_bytes={} bitmap_retry_bytes={} minimal_retry_bytes={} control_frames={} bitmap_frames={} minimal_frames={} bitmap_data_frames={} minimal_data_frames={} bitmap_ack_frames={} minimal_ack_frames={} bitmap_retry_frames={} minimal_retry_frames={} bitmap_max_pending_bytes={} minimal_max_pending_bytes={} minimal_max_pending_frames={} minimal_max_seen_ids={} minimal_max_receiver_flights={} control_data_drops={} bitmap_data_drops={} minimal_data_drops={} bitmap_ack_drops={} minimal_ack_drops={} bitmap_minimal_shared_drops={} minimal_retry_exhausted={} minimal_stale_injected={} minimal_stale_rejected={} minimal_duplicates={} minimal_reorders={}",
+        control.converged,
+        bitmap.converged,
+        minimal.converged,
+        control.elapsed.as_millis(),
+        bitmap.elapsed.as_millis(),
+        minimal.elapsed.as_millis(),
+        control_bytes,
+        bitmap_bytes,
+        minimal_bytes,
+        control.metrics.useful_bytes,
+        bitmap.metrics.useful_bytes,
+        minimal.metrics.useful_bytes,
+        bitmap.metrics.first_data_bytes,
+        minimal.metrics.first_data_bytes,
+        bitmap.metrics.control_bytes,
+        minimal.metrics.control_bytes,
+        bitmap.metrics.retry_bytes,
+        minimal.metrics.retry_bytes,
+        control.metrics.total_frames(),
+        bitmap.metrics.total_frames(),
+        minimal.metrics.total_frames(),
+        bitmap.metrics.first_data_frames,
+        minimal.metrics.first_data_frames,
+        bitmap.metrics.control_frames,
+        minimal.metrics.control_frames,
+        bitmap.metrics.retry_frames,
+        minimal.metrics.retry_frames,
+        bitmap.metrics.max_pending_bytes,
+        minimal.metrics.max_pending_bytes,
+        minimal.metrics.max_pending_frames,
+        minimal.metrics.max_seen_ids,
+        minimal.metrics.max_receiver_flights,
+        control.metrics.data_fault_drops,
+        bitmap.metrics.data_fault_drops,
+        minimal.metrics.data_fault_drops,
+        bitmap.metrics.control_fault_drops,
+        minimal.metrics.control_fault_drops,
+        bitmap_minimal_shared,
+        minimal.metrics.retry_exhausted,
+        minimal.metrics.stale_injected,
+        minimal.metrics.stale_rejected,
+        minimal.metrics.fault_duplicates,
+        minimal.metrics.fault_reorders,
+    );
+}

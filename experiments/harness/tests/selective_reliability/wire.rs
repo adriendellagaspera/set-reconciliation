@@ -17,6 +17,7 @@ pub(super) const DATA: u8 = 0;
 pub(super) const ACK: u8 = 1;
 pub(super) const BITMAP_ACK: u8 = 2;
 pub(super) const HEADER_LEN: usize = 23;
+pub(super) const MINIMAL_HEADER_LEN: usize = 15;
 pub(super) const BITMAP_ACK_BASE_LEN: usize = 10;
 pub(super) const BITMAP_ACK_ENTRY_LEN: usize = 20;
 pub(super) const MAX_FRAMES_PER_FLIGHT: usize = 128;
@@ -35,6 +36,35 @@ pub(super) struct WireKey {
     pub(super) flight: u32,
     pub(super) slot: u16,
     pub(super) semantic: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum DataWire {
+    Full,
+    Minimal,
+}
+
+impl DataWire {
+    pub(super) fn header_len(self) -> usize {
+        match self {
+            Self::Full => HEADER_LEN,
+            Self::Minimal => MINIMAL_HEADER_LEN,
+        }
+    }
+
+    pub(super) fn encode(self, key: WireKey, payload: &[u8]) -> Vec<u8> {
+        match self {
+            Self::Full => encode_envelope(DATA, key, payload),
+            Self::Minimal => encode_minimal_envelope(DATA, key, payload),
+        }
+    }
+
+    pub(super) fn decode(self, bytes: &[u8]) -> io::Result<(u8, WireKey, &[u8])> {
+        match self {
+            Self::Full => decode_envelope(bytes),
+            Self::Minimal => decode_minimal_envelope(bytes),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -301,6 +331,39 @@ pub(super) fn decode_envelope(bytes: &[u8]) -> io::Result<(u8, WireKey, &[u8])> 
             semantic,
         },
         &bytes[HEADER_LEN..],
+    ))
+}
+
+pub(super) fn encode_minimal_envelope(kind: u8, key: WireKey, payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(MINIMAL_HEADER_LEN + payload.len());
+    out.push(kind);
+    out.extend_from_slice(&key.epoch.to_le_bytes());
+    out.extend_from_slice(&key.flight.to_le_bytes());
+    out.extend_from_slice(&key.slot.to_le_bytes());
+    out.extend_from_slice(payload);
+    out
+}
+
+pub(super) fn decode_minimal_envelope(bytes: &[u8]) -> io::Result<(u8, WireKey, &[u8])> {
+    if bytes.len() < MINIMAL_HEADER_LEN {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "minimal reliability envelope is truncated",
+        ));
+    }
+    let epoch = u64::from_le_bytes(bytes[1..9].try_into().unwrap());
+    let flight = u32::from_le_bytes(bytes[9..13].try_into().unwrap());
+    let slot = u16::from_le_bytes(bytes[13..15].try_into().unwrap());
+    let payload = &bytes[MINIMAL_HEADER_LEN..];
+    Ok((
+        bytes[0],
+        WireKey {
+            epoch,
+            flight,
+            slot,
+            semantic: stable_id(payload),
+        },
+        payload,
     ))
 }
 

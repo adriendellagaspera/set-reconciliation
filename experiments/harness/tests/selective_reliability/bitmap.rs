@@ -21,10 +21,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::harness::{Fixture, Sample};
 use super::wire::{
-    decode_bitmap_ack, decode_envelope, encode_bitmap_ack, encode_envelope, pack_messages,
-    stable_id, AttemptMap, BitmapAck, BitmapAckEntry, FaultKey, FaultProfile, Metrics, Trace,
-    WireKey, ACK, BITMAP_ACK, BITMAP_ACK_BASE_LEN, BITMAP_ACK_ENTRY_LEN, DATA, HEADER_LEN,
-    MAX_FRAMES_PER_FLIGHT, MAX_PENDING_FRAMES,
+    decode_bitmap_ack, encode_bitmap_ack, pack_messages, stable_id, AttemptMap, BitmapAck,
+    BitmapAckEntry, DataWire, FaultKey, FaultProfile, Metrics, Trace, WireKey, ACK, BITMAP_ACK,
+    BITMAP_ACK_BASE_LEN, BITMAP_ACK_ENTRY_LEN, DATA, MAX_FRAMES_PER_FLIGHT, MAX_PENDING_FRAMES,
 };
 
 const MAX_RETRIES: usize = 3;
@@ -119,6 +118,7 @@ struct BitmapShared {
     ack_ledger: Mutex<AckLedger>,
     ack_batch_entries: usize,
     frame_budget: usize,
+    data_header_len: usize,
     metrics: Arc<Mutex<Metrics>>,
     trace: Arc<Mutex<Trace>>,
 }
@@ -144,7 +144,7 @@ impl BitmapShared {
                 metrics.retry_frames += 1;
                 metrics.retry_bytes += frame.bytes.len();
             } else {
-                metrics.useful_bytes += frame.bytes.len() - HEADER_LEN;
+                metrics.useful_bytes += frame.bytes.len() - self.data_header_len;
                 metrics.first_data_frames += 1;
                 metrics.first_data_bytes += frame.bytes.len();
             }
@@ -297,6 +297,7 @@ impl BitmapShared {
 struct BitmapTransport {
     shared: Arc<BitmapShared>,
     budget: usize,
+    data_wire: DataWire,
     epoch: u64,
     peer_epoch: u64,
     next_flight: AtomicU32,
@@ -316,7 +317,7 @@ impl Transport for BitmapTransport {
                     }
                 }
                 Some(DATA) => {
-                    let (_, key, payload) = decode_envelope(&raw[..n])?;
+                    let (_, key, payload) = self.data_wire.decode(&raw[..n])?;
                     if key.epoch != self.peer_epoch {
                         self.shared.metrics.lock().stale_rejected += 1;
                         continue;
@@ -360,12 +361,15 @@ impl Transport for BitmapTransport {
     }
 
     async fn send_to(&self, buf: &[u8], dst: &SocketAddr) -> io::Result<usize> {
-        let payload_budget = self.budget.checked_sub(HEADER_LEN).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "frame budget below identity header size",
-            )
-        })?;
+        let payload_budget = self
+            .budget
+            .checked_sub(self.data_wire.header_len())
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "frame budget below identity header size",
+                )
+            })?;
         let frames = pack_messages(buf, payload_budget)?;
         if frames.len() > MAX_FRAMES_PER_FLIGHT {
             return Err(io::Error::new(
@@ -386,7 +390,7 @@ impl Transport for BitmapTransport {
                 };
                 PendingFrame {
                     key,
-                    bytes: Arc::new(encode_envelope(DATA, key, &payload)),
+                    bytes: Arc::new(self.data_wire.encode(key, &payload)),
                     dst: *dst,
                 }
             })
@@ -424,6 +428,7 @@ fn replica(
     network: &InMemoryNetwork,
     budget: usize,
     profile: FaultProfile,
+    data_wire: DataWire,
     spec: ReplicaSpec<'_>,
 ) -> ReplicaProbe {
     let port = 24_100;
@@ -450,12 +455,14 @@ fn replica(
         ack_ledger: Mutex::new(AckLedger::default()),
         ack_batch_entries,
         frame_budget: budget,
+        data_header_len: data_wire.header_len(),
         metrics: Arc::clone(&metrics),
         trace: Arc::clone(&trace),
     });
     let transport = BitmapTransport {
         shared,
         budget,
+        data_wire,
         epoch: spec.epoch,
         peer_epoch: spec.peer_epoch,
         next_flight: AtomicU32::new(0),
@@ -485,6 +492,23 @@ pub(super) async fn run_bitmap_sample(
     budget: usize,
     profile: FaultProfile,
 ) -> Sample {
+    run_bitmap_sample_with_wire(fixture, budget, profile, DataWire::Full).await
+}
+
+pub(super) async fn run_minimal_bitmap_sample(
+    fixture: &Fixture,
+    budget: usize,
+    profile: FaultProfile,
+) -> Sample {
+    run_bitmap_sample_with_wire(fixture, budget, profile, DataWire::Minimal).await
+}
+
+async fn run_bitmap_sample_with_wire(
+    fixture: &Fixture,
+    budget: usize,
+    profile: FaultProfile,
+    data_wire: DataWire,
+) -> Sample {
     let network = InMemoryNetwork::new();
     let left_ip: IpAddr = "127.9.10.1".parse().unwrap();
     let right_ip: IpAddr = "127.9.10.2".parse().unwrap();
@@ -494,6 +518,7 @@ pub(super) async fn run_bitmap_sample(
         &network,
         budget,
         profile,
+        data_wire,
         ReplicaSpec {
             ip: left_ip,
             epoch: left_epoch,
@@ -506,6 +531,7 @@ pub(super) async fn run_bitmap_sample(
         &network,
         budget,
         profile,
+        data_wire,
         ReplicaSpec {
             ip: right_ip,
             epoch: right_epoch,
@@ -539,7 +565,7 @@ pub(super) async fn run_bitmap_sample(
             assert_eq!(
                 right.get_cloned(&key),
                 Some(key.wrapping_mul(2_654_435_761)),
-                "bitmap scenario={:#x} key={key}",
+                "bitmap wire={data_wire:?} scenario={:#x} key={key}",
                 profile.scenario
             );
         }
