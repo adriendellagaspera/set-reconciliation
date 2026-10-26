@@ -107,6 +107,7 @@ fn one_child_split_reuses_the_parent_aggregate() {
 
     assert_eq!(outcome.split(), 1);
     assert_eq!(child_ranges.len(), 1);
+    assert_eq!(outcome.children(), child_ranges.len());
     assert!(enumeration_ranges.is_empty());
     assert_eq!(
         store.aggregate_calls.get(),

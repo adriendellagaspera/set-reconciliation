@@ -29,11 +29,14 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod async_view;
 mod policy;
 #[cfg(rbsr_internal_testing)]
 mod probe_harness;
 mod protocol;
 mod rsos_view;
+
+pub use async_view::{AsyncRsosView, ImmediateView};
 
 pub use policy::{
     Comparison, Decision, EnumerateBelowThreshold, FanOut, FixedFanOut, RefinementPolicy,
@@ -47,7 +50,8 @@ pub use probe_harness::{
     balanced_swap, drive, drive_pair, Drive, NarrowStore, Termination, DRIVE_STORE_SIZE,
 };
 pub use protocol::{
-    initial_ranges, protocol_round, protocol_round_with_policy, EnumerationRange, RangeAggregate,
+    initial_ranges, initial_ranges_async, protocol_round, protocol_round_async,
+    protocol_round_with_policy, protocol_round_with_policy_async, EnumerationRange, RangeAggregate,
     RoundOutcome,
 };
 pub use rsos_view::RsosView;

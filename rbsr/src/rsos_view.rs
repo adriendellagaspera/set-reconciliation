@@ -33,7 +33,7 @@ use rsos::{Aggregate, Rsos};
 /// | **rank-inverts-select** | `rank(select(r)) == r` for `r < size()` | defended, as above |
 /// | **count-agreement** | `aggregate(l..u).size() == rank(u) - rank(l)`; `aggregate(..).size() == size()` | defended — the span only ever reaches a policy, never an index |
 /// | **summary-folds-lift** | `aggregate(r).fingerprint()` is the `⊗`-fold of [`rsos::lift`] over `r` | **implementor's** — [`rsos::Rsos::aggregate`] states it normatively |
-/// | **one-snapshot-per-round** | all four observe one snapshot per `protocol_round` call | **implementor's** — `reconcile` holds a read lock across the call |
+/// | **one-snapshot-per-round** | all four observe one snapshot per `protocol_round` call | **implementor's** — the caller pins a coherent view across the call |
 ///
 /// Breaking a *defended* law costs the backend its own correctness and nothing here. Breaking
 /// **summary-folds-lift** or **one-snapshot-per-round** reconciles **silently wrongly**: no
