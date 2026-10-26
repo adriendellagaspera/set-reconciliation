@@ -7,7 +7,7 @@
 
 use rsos::{Fingerprint, FingerprintTreeMap};
 
-use crate::policy::{EnumerateBelowThreshold, SplitStride, SqrtFanOut};
+use crate::policy::{Comparison, Decision, EnumerateBelowThreshold, SplitStride, SqrtFanOut};
 
 use super::*;
 

@@ -8,6 +8,7 @@
 
 use rand::SeedableRng;
 
+use super::driver::block_count;
 use super::*;
 
 use rsos::{Fingerprint, FingerprintTreeMap};

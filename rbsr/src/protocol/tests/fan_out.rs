@@ -107,10 +107,28 @@ fn one_child_split_reuses_the_parent_aggregate() {
 
     assert_eq!(outcome.split(), 1);
     assert_eq!(child_ranges.len(), 1);
+    assert_eq!(outcome.children(), child_ranges.len());
     assert!(enumeration_ranges.is_empty());
     assert_eq!(
         store.aggregate_calls.get(),
         1,
         "an uncut child is the parent; its aggregate must be reused rather than recomputed"
     );
+}
+
+#[test]
+fn every_split_child_advertises_its_own_range_summary() {
+    for size in [17, 100, 397] {
+        let store = tree(&(0..size).collect::<Vec<_>>());
+        let (children, enumerations) = round(&store, splitting_segment(size as usize));
+        assert!(enumerations.is_empty());
+        assert!(children.len() > 1);
+        for child in children {
+            assert_eq!(
+                child.aggregate,
+                store.aggregate(child.range.clone()),
+                "a refined child must advertise its own summary, including the final child"
+            );
+        }
+    }
 }

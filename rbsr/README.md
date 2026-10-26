@@ -22,4 +22,24 @@ the underlying RBSR protocol or RSOS abstraction. See the repository
 
 See the crate rustdoc for the protocol driver, range messages, and refinement policies.
 
+## Synchronous and asynchronous queries
+
+`initial_ranges` and `protocol_round[_with_policy]` call the borrowed, infallible `RsosView`
+directly. The RAM path does not poll a future or require an executor.
+
+`initial_ranges_async` and `protocol_round[_with_policy]_async` consume `AsyncRsosView` queries:
+fallible `size`, `aggregate`, `rank` and owned-key `select`, using native Send futures. The store
+must pin one coherent logical snapshot across a round's suspension points, or return an error
+if it expires. Physical pages and stored values remain outside this interface.
+
+Both executors share bound admission, policy decisions, progress guards, scalar cut planning,
+half-open child construction and outcome accounting. Each query executor retains its bounds
+and aggregates locally and iterates a precomputed number of cuts. Async errors and cancellation leave caller
+output vectors and RNG unchanged; active input ranges are consumed, and policy/backend side
+effects are outside that rollback contract. `ImmediateView::new(&snapshot)` adapts a synchronous
+view with ready, infallible futures, cloning only selected boundary keys.
+
+This is a query execution seam, not a storage transaction, a production disk backend or a
+replication runtime. No async runtime, backend dependency or wire-format change is introduced.
+
 Licensed under MIT OR Apache-2.0.
