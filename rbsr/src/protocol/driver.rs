@@ -15,6 +15,7 @@ pub(super) struct Driver {
 }
 
 impl Driver {
+    #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn prepare<K: Clone, P: RefinementPolicy + ?Sized>(
         &mut self,
@@ -83,7 +84,6 @@ impl Driver {
                 Some(Split {
                     start,
                     end,
-                    start_index,
                     end_index,
                     cur_index: start_index,
                     stride,
@@ -97,6 +97,7 @@ impl Driver {
         }
     }
 
+    #[inline(always)]
     pub(super) fn emit<K>(
         &mut self,
         range: KeyRange<K>,
@@ -107,6 +108,7 @@ impl Driver {
         self.outcome.children += 1;
     }
 
+    #[inline(always)]
     pub(super) fn outcome(self) -> RoundOutcome {
         self.outcome
     }
@@ -115,7 +117,6 @@ impl Driver {
 pub(super) struct Split<K> {
     start: StartBound<K>,
     end: EndBound<K>,
-    start_index: AdmittedRank,
     end_index: AdmittedRank,
     cur_index: AdmittedRank,
     stride: usize,
@@ -127,11 +128,8 @@ pub(super) struct Split<K> {
 }
 
 impl<K: Clone> Split<K> {
-    pub(super) fn next_cut(&self) -> Option<usize> {
-        self.next_rank().map(|rank| rank.get())
-    }
-
-    fn next_rank(&self) -> Option<AdmittedRank> {
+    #[inline(always)]
+    pub(super) fn next_cut(&mut self) -> Option<usize> {
         if self.block >= self.child_count.saturating_sub(1) {
             return None;
         }
@@ -140,22 +138,23 @@ impl<K: Clone> Split<K> {
         } else {
             self.stride
         };
-        Some(
-            self.cur_index
-                .cut_before(self.end_index, stride)
-                .expect("non-final split child must cut before the parent end"),
-        )
+        self.cur_index = self
+            .cur_index
+            .cut_before(self.end_index, stride)
+            .expect("non-final split child must cut before the parent end");
+        self.block += 1;
+        Some(self.cur_index.get())
     }
 
+    #[inline(always)]
     pub(super) fn cut(&mut self, key: K) -> KeyRange<K> {
-        self.cur_index = self.next_rank().expect("cut requires an interior boundary");
-        self.block += 1;
         let start = std::mem::replace(&mut self.start, StartBound::Included(key.clone()));
         KeyRange::new(start, EndBound::Excluded(key))
     }
 
+    #[inline(always)]
     pub(super) fn finish(self) -> (KeyRange<K>, Option<Aggregate>) {
-        let aggregate = (self.cur_index == self.start_index).then_some(self.parent);
+        let aggregate = (self.block == 0).then_some(self.parent);
         (KeyRange::new(self.start, self.end), aggregate)
     }
 }

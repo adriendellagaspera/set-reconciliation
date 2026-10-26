@@ -95,6 +95,7 @@ impl<K> BoundedRange<K> {
     /// Absolute positions from [`crate::RsosView::rank`], which the fan-out steps through with
     /// [`crate::RsosView::select`] — an aggregate gives the count, not the positions. Admitted here, see
     /// [`AdmittedRank`], where a backend's answer stops being trusted.
+    #[inline(always)]
     pub(super) fn from_ranks(
         start: StartBound<K>,
         end: EndBound<K>,
