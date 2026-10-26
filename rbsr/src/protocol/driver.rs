@@ -1,10 +1,11 @@
-//! Shared per-range refinement plan. Query execution remains with the sync/async caller.
+//! Shared admission, classification, cut arithmetic and output accounting.
+//! Query executors retain their bounds and aggregates locally.
 
 use rand::{rngs::StdRng, Rng};
 use rsos::Aggregate;
 use tracing::debug;
 
-use crate::{Comparison, Decision, RefinementPolicy};
+use crate::{Comparison, Decision, RefinementPolicy, SplitStride};
 
 use super::rank::{AdmittedRank, BoundedRange, InvertedRange};
 use super::{EndBound, EnumerationRange, KeyRange, RangeAggregate, RoundOutcome, StartBound};
@@ -16,29 +17,31 @@ pub(super) struct Driver {
 
 impl Driver {
     #[inline(always)]
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn prepare<K: Clone, P: RefinementPolicy + ?Sized>(
+    pub(super) fn admit<K>(
         &mut self,
         start: StartBound<K>,
         end: EndBound<K>,
-        local: Aggregate,
-        remote: Aggregate,
         size: usize,
         raw_start: usize,
         raw_end: usize,
-        policy: &P,
-        children: &mut Vec<RangeAggregate<K>>,
-        enumerations: &mut Vec<EnumerationRange<K>>,
-        rng: &mut StdRng,
-    ) -> Option<Split<K>> {
-        let bounded = match BoundedRange::from_ranks(start, end, size, raw_start, raw_end) {
-            Ok(bounded) => bounded,
+    ) -> Option<BoundedRange<K>> {
+        match BoundedRange::from_ranks(start, end, size, raw_start, raw_end) {
+            Ok(bounded) => Some(bounded),
             Err(InvertedRange { raw_start, raw_end }) => {
                 debug!("dropping malformed segment: start rank {raw_start} > end rank {raw_end}");
                 self.outcome.dropped_malformed += 1;
-                return None;
+                None
             }
-        };
+        }
+    }
+
+    #[inline(always)]
+    pub(super) fn classify<P: RefinementPolicy + ?Sized>(
+        &mut self,
+        local: Aggregate,
+        remote: Aggregate,
+        policy: &P,
+    ) -> Decision {
         let comparison = Comparison::new(local, remote, self.outcome.children);
         let span = comparison.span();
         let decision = match policy.decide(comparison) {
@@ -51,50 +54,31 @@ impl Driver {
             }
             other => other,
         };
-        let BoundedRange {
-            start,
-            end,
-            start_index,
-            end_index,
-        } = bounded;
         match decision {
-            Decision::Skip => {
-                self.outcome.skipped += 1;
-                None
-            }
-            Decision::Enumerate => {
-                self.outcome.enumerated += 1;
-                if std::num::NonZeroUsize::new(remote.size()).is_some() {
-                    self.emit(
-                        KeyRange::new(start.clone(), end.clone()),
-                        Aggregate::ZERO,
-                        children,
-                    );
-                }
-                enumerations.push((start.into(), end.into()));
-                None
-            }
-            Decision::Split(stride) => {
-                self.outcome.split += 1;
-                let stride = stride.get();
-                let actual_span = end_index.get() - start_index.get();
-                let remainder = actual_span % stride;
-                let child_count = block_count(actual_span, stride).max(1);
-                let short_block = (remainder != 0).then(|| rng.gen_range(0..child_count));
-                Some(Split {
-                    start,
-                    end,
-                    end_index,
-                    cur_index: start_index,
-                    stride,
-                    remainder,
-                    child_count,
-                    short_block,
-                    block: 0,
-                    parent: local,
-                })
-            }
+            Decision::Skip => self.outcome.skipped += 1,
+            Decision::Enumerate => self.outcome.enumerated += 1,
+            Decision::Split(_) => self.outcome.split += 1,
         }
+        decision
+    }
+
+    #[inline(always)]
+    pub(super) fn enumerate<K: Clone>(
+        &mut self,
+        start: StartBound<K>,
+        end: EndBound<K>,
+        remote: Aggregate,
+        children: &mut Vec<RangeAggregate<K>>,
+        enumerations: &mut Vec<EnumerationRange<K>>,
+    ) {
+        if std::num::NonZeroUsize::new(remote.size()).is_some() {
+            self.emit(
+                KeyRange::new(start.clone(), end.clone()),
+                Aggregate::ZERO,
+                children,
+            );
+        }
+        enumerations.push((start.into(), end.into()));
     }
 
     #[inline(always)]
@@ -114,25 +98,50 @@ impl Driver {
     }
 }
 
-pub(super) struct Split<K> {
-    start: StartBound<K>,
-    end: EndBound<K>,
-    end_index: AdmittedRank,
+/// Only scalar cut state. Bounds and summaries remain in the query executor's own locals.
+pub(super) struct Split {
     cur_index: AdmittedRank,
+    end_index: AdmittedRank,
     stride: usize,
     remainder: usize,
     child_count: usize,
     short_block: Option<usize>,
     block: usize,
-    parent: Aggregate,
 }
 
-impl<K: Clone> Split<K> {
+impl Split {
     #[inline(always)]
-    pub(super) fn next_cut(&mut self) -> Option<usize> {
-        if self.block >= self.child_count.saturating_sub(1) {
-            return None;
+    pub(super) fn new(
+        start: AdmittedRank,
+        end: AdmittedRank,
+        stride: SplitStride,
+        rng: &mut StdRng,
+    ) -> Self {
+        let stride = stride.get();
+        let actual_span = end.get() - start.get();
+        let remainder = actual_span % stride;
+        let child_count = block_count(actual_span, stride).max(1);
+        let short_block = (remainder != 0).then(|| rng.gen_range(0..child_count));
+        Self {
+            cur_index: start,
+            end_index: end,
+            stride,
+            remainder,
+            child_count,
+            short_block,
+            block: 0,
         }
+    }
+
+    // Bound query work independently of cursor updates, as the protocol's fixed fan-out does.
+    #[inline(always)]
+    pub(super) fn cuts(&self) -> usize {
+        self.child_count.saturating_sub(1)
+    }
+
+    // Called exactly `cuts()` times by the query executor's bounded loop.
+    #[inline(always)]
+    pub(super) fn next_cut(&mut self) -> usize {
         let stride = if self.short_block == Some(self.block) {
             self.remainder
         } else {
@@ -143,19 +152,21 @@ impl<K: Clone> Split<K> {
             .cut_before(self.end_index, stride)
             .expect("non-final split child must cut before the parent end");
         self.block += 1;
-        Some(self.cur_index.get())
+        self.cur_index.get()
     }
 
     #[inline(always)]
-    pub(super) fn cut(&mut self, key: K) -> KeyRange<K> {
-        let start = std::mem::replace(&mut self.start, StartBound::Included(key.clone()));
-        KeyRange::new(start, EndBound::Excluded(key))
+    pub(super) fn uncut(&self) -> bool {
+        self.block == 0
     }
 
+    /// One interior boundary, with disjoint half-open children by construction.
     #[inline(always)]
-    pub(super) fn finish(self) -> (KeyRange<K>, Option<Aggregate>) {
-        let aggregate = (self.block == 0).then_some(self.parent);
-        (KeyRange::new(self.start, self.end), aggregate)
+    pub(super) fn child<K: Clone>(start: StartBound<K>, key: K) -> (KeyRange<K>, StartBound<K>) {
+        (
+            KeyRange::new(start, EndBound::Excluded(key.clone())),
+            StartBound::Included(key),
+        )
     }
 }
 

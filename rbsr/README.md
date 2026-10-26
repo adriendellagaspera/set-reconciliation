@@ -32,8 +32,9 @@ fallible `size`, `aggregate`, `rank` and owned-key `select`, using native Send f
 must pin one coherent logical snapshot across a round's suspension points, or return an error
 if it expires. Physical pages and stored values remain outside this interface.
 
-Both executors use one private range refinement plan for bound admission, policy decisions,
-progress guards, split cuts and outcome accounting. Async errors and cancellation leave caller
+Both executors share bound admission, policy decisions, progress guards, scalar cut planning,
+half-open child construction and outcome accounting. Each query executor retains its bounds
+and aggregates locally and iterates a precomputed number of cuts. Async errors and cancellation leave caller
 output vectors and RNG unchanged; active input ranges are consumed, and policy/backend side
 effects are outside that rollback contract. `ImmediateView::new(&snapshot)` adapts a synchronous
 view with ready, infallible futures, cloning only selected boundary keys.

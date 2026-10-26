@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use rsos::Aggregate;
 
-use crate::policy::{FanOut, FixedFanOut, RefinementPolicy};
+use crate::policy::{Decision, FanOut, FixedFanOut, RefinementPolicy};
 use crate::rsos_view::RsosView;
 use crate::AsyncRsosView;
 
@@ -31,7 +31,8 @@ mod outcome;
 mod range_aggregate;
 mod rank;
 
-use driver::Driver;
+use driver::{Driver, Split};
+use rank::BoundedRange;
 
 /// The default refinement policy used by [`protocol_round`].
 const DEFAULT_POLICY: FixedFanOut = FixedFanOut::new(FanOut::NEGENTROPY);
@@ -164,30 +165,40 @@ where
             EndBound::Unbounded => size,
             EndBound::Excluded(key) => local.rank(key),
         };
-        let Some(mut split) = driver.prepare(
-            start,
-            end,
-            aggregate,
-            remote,
-            size,
-            raw_start,
-            raw_end,
-            policy,
-            child_ranges,
-            enumeration_ranges,
-            rng,
-        ) else {
+        let Some(bounded) = driver.admit(start, end, size, raw_start, raw_end) else {
             continue;
         };
-        while let Some(index) = split.next_cut() {
-            let key = local.select(index).clone();
-            let range = split.cut(key);
-            let aggregate = local.aggregate(range.clone());
-            driver.emit(range, aggregate, child_ranges);
+        let BoundedRange {
+            start,
+            end,
+            start_index,
+            end_index,
+        } = bounded;
+        match driver.classify(aggregate, remote, policy) {
+            Decision::Skip => {}
+            Decision::Enumerate => {
+                driver.enumerate(start, end, remote, child_ranges, enumeration_ranges)
+            }
+            Decision::Split(stride) => {
+                let mut split = Split::new(start_index, end_index, stride, rng);
+                let mut current = start;
+                for _ in 0..split.cuts() {
+                    let index = split.next_cut();
+                    let key = local.select(index).clone();
+                    let (range, next) = Split::child(current, key);
+                    let child_aggregate = local.aggregate(range.clone());
+                    driver.emit(range, child_aggregate, child_ranges);
+                    current = next;
+                }
+                let range = KeyRange::new(current, end);
+                let child_aggregate = if split.uncut() {
+                    aggregate
+                } else {
+                    local.aggregate(range.clone())
+                };
+                driver.emit(range, child_aggregate, child_ranges);
+            }
         }
-        let (range, parent_aggregate) = split.finish();
-        let aggregate = parent_aggregate.unwrap_or_else(|| local.aggregate(range.clone()));
-        driver.emit(range, aggregate, child_ranges);
     }
     driver.outcome()
 }
@@ -274,39 +285,44 @@ where
             EndBound::Unbounded => size,
             EndBound::Excluded(key) => local.rank(key).await?,
         };
-        let Some(mut split) = driver.prepare(
-            start,
-            end,
-            aggregate,
-            remote,
-            size,
-            raw_start,
-            raw_end,
-            policy,
-            &mut children,
-            &mut enumerations,
-            &mut staged_rng,
-        ) else {
+        let Some(bounded) = driver.admit(start, end, size, raw_start, raw_end) else {
             continue;
         };
-        while let Some(index) = split.next_cut() {
-            let key = local.select(index).await?;
-            let range = split.cut(key);
-            let aggregate = local
-                .aggregate((range.0.clone().into(), range.1.clone().into()))
-                .await?;
-            driver.emit(range, aggregate, &mut children);
-        }
-        let (range, parent_aggregate) = split.finish();
-        let aggregate = match parent_aggregate {
-            Some(aggregate) => aggregate,
-            None => {
-                local
-                    .aggregate((range.0.clone().into(), range.1.clone().into()))
-                    .await?
+        let BoundedRange {
+            start,
+            end,
+            start_index,
+            end_index,
+        } = bounded;
+        match driver.classify(aggregate, remote, policy) {
+            Decision::Skip => {}
+            Decision::Enumerate => {
+                driver.enumerate(start, end, remote, &mut children, &mut enumerations)
             }
-        };
-        driver.emit(range, aggregate, &mut children);
+            Decision::Split(stride) => {
+                let mut split = Split::new(start_index, end_index, stride, &mut staged_rng);
+                let mut current = start;
+                for _ in 0..split.cuts() {
+                    let index = split.next_cut();
+                    let key = local.select(index).await?;
+                    let (range, next) = Split::child(current, key);
+                    let child_aggregate = local
+                        .aggregate((range.0.clone().into(), range.1.clone().into()))
+                        .await?;
+                    driver.emit(range, child_aggregate, &mut children);
+                    current = next;
+                }
+                let range = KeyRange::new(current, end);
+                let child_aggregate = if split.uncut() {
+                    aggregate
+                } else {
+                    local
+                        .aggregate((range.0.clone().into(), range.1.clone().into()))
+                        .await?
+                };
+                driver.emit(range, child_aggregate, &mut children);
+            }
+        }
     }
     child_ranges.extend(children);
     enumeration_ranges.extend(enumerations);
