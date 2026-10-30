@@ -90,8 +90,11 @@ fn make_stores(
         let different = changed(index, case);
         let physical = key(index, &case.layout);
         let left_present = !(different && case.shape == "right-only-scattered");
-        let right_present =
-            !(different && matches!(case.shape.as_str(), "deletion-scattered" | "deletion-clustered"));
+        let right_present = !(different
+            && matches!(
+                case.shape.as_str(),
+                "deletion-scattered" | "deletion-clustered"
+            ));
         let right_version = u8::from(different && case.shape == "updated-scattered");
 
         if left_present {
@@ -215,7 +218,8 @@ fn compare(case: Case) -> Result<Value, Box<dyn Error>> {
             "Rust and Go use different enumeration cutoffs and split boundary rules",
             "Go MemStore is not a networked datastore; Store get counts are not RTTs",
             "Rust measurements include no physical KV I/O",
-            "build timings include both peer indexes; process startup is excluded"
+            "build timings include both peer indexes; process startup is excluded",
+            "Go bulk loading includes sorting; Rust always inserts incrementally"
         ]
     }))
 }
@@ -236,7 +240,10 @@ mod tests {
 
     #[test]
     fn partitions_follow_the_same_bytes_and_are_distinct() {
-        assert_eq!(key(1, "ordered"), [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+        assert_eq!(
+            key(1, "ordered"),
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        );
         assert_ne!(key(1, "hashed"), key(2, "hashed"));
     }
 
