@@ -85,7 +85,7 @@ jobs:
       - name: Matched Rust/Go differential and protocol smoke tests
         working-directory: experiments
         env:
-          GO_RSOS_BIN: \${{ runner.temp }}/go-rsos-comparator
+          GO_RSOS_BIN: ${{ runner.temp }}/go-rsos-comparator
           RUSTFLAGS: -Dwarnings --cfg rbsr_internal_testing
         run: |
           cargo fmt --all --check
