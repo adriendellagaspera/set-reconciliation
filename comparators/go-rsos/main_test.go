@@ -14,7 +14,7 @@ func TestExactDifferences(t *testing.T) {
 					c:=Case{Records:128,ChangedKeys:7,Shape:shape,Layout:layout,Build:build,SplitFactor:16,Threshold:16}
 					out,err:=runCase(context.Background(),c)
 					if err!=nil {t.Fatal(err)}
-					var wantL,wantR []Element
+					wantL,wantR:=[]Element{},[]Element{}
 					for i:=uint64(0);i<c.Records;i++ {
 						if !changed(i,c) {continue}
 						switch shape {
