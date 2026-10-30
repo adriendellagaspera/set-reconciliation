@@ -14,7 +14,7 @@ From this directory:
 
 For the matched Rust control (from repository root):
 
-    go build -o /tmp/go-rsos-comparator ./comparators/go-rsos
+    (cd comparators/go-rsos && go build -o /tmp/go-rsos-comparator .)
     GO_RSOS_BIN=/tmp/go-rsos-comparator cargo run --manifest-path experiments/Cargo.toml -p set-reconciliation-experiments --bin compare_go_rsos --release <<<'{"records":4096,"changed_keys":13,"shape":"updated-scattered","layout":"hashed","build":"bulk","split_factor":16,"resolve_threshold":128}'
 
 Output is JSON with explicit attribution and timings; the Rust command rejects incorrect signed differences before producing its combined report.

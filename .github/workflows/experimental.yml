@@ -60,3 +60,35 @@ jobs:
       - run: cargo test --workspace
       - run: cargo bench --workspace --no-run
       - run: cargo doc --workspace --no-deps
+
+  go-rsos:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: comparators/go-rsos
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache-dependency-path: comparators/go-rsos/go.mod
+      - run: go mod download
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go build -o "$RUNNER_TEMP/go-rsos-comparator" .
+      - uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: experiments
+      - name: Matched Rust/Go differential and protocol smoke tests
+        working-directory: experiments
+        env:
+          GO_RSOS_BIN: \${{ runner.temp }}/go-rsos-comparator
+          RUSTFLAGS: -Dwarnings --cfg rbsr_internal_testing
+        run: |
+          cargo fmt --all --check
+          cargo test -p set-reconciliation-experiments --bin compare_go_rsos
+          printf '%s\n' '{"records":128,"changed_keys":7,"shape":"updated-scattered","layout":"hashed","build":"bulk","split_factor":16,"resolve_threshold":16}' | cargo run -p set-reconciliation-experiments --bin compare_go_rsos > "$RUNNER_TEMP/go-rsos-comparison.json"
+          python3 -m json.tool "$RUNNER_TEMP/go-rsos-comparison.json" > /dev/null

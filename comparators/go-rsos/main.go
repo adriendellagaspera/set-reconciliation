@@ -171,10 +171,8 @@ func changed(index uint64, c Case) bool {
 		start := (c.Records - c.ChangedKeys)/2
 		return index >= start && index < start+c.ChangedKeys
 	}
-	for i:=uint64(1); i<=c.ChangedKeys; i++ {
-		if index == (c.Records/(c.ChangedKeys+1))*i { return true }
-	}
-	return false
+	step := c.Records / (c.ChangedKeys + 1)
+	return step > 0 && index > 0 && index % step == 0 && index / step <= c.ChangedKeys
 }
 
 func value(index uint64, version uint8) uint64 {
