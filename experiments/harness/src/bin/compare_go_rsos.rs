@@ -105,7 +105,10 @@ fn make_stores(
         }
         if different {
             if left_present {
-                expected_left.push(Element { key: index, version: 0 });
+                expected_left.push(Element {
+                    key: index,
+                    version: 0,
+                });
             }
             if right_present {
                 expected_right.push(Element {
@@ -154,7 +157,10 @@ fn run_rust_protocol(
 
 fn run_go(case: &Case) -> Result<Value, Box<dyn Error>> {
     let binary = env::var("GO_RSOS_BIN").map_err(|_| {
-        io::Error::new(io::ErrorKind::NotFound, "set GO_RSOS_BIN to the built Go comparator")
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "set GO_RSOS_BIN to the built Go comparator",
+        )
     })?;
     let mut child = Command::new(binary)
         .stdin(Stdio::piped())
