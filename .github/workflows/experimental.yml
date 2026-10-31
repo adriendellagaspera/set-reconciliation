@@ -74,6 +74,11 @@ jobs:
           cache-dependency-path: comparators/go-rsos/go.mod
       # Build a verified module graph for this experimental pinned comparator.
       - run: go mod tidy
+      - name: Print Go module checksums for a committed reproducibility lock
+        run: |
+          echo 'BEGIN_GO_SUM'
+          cat go.sum
+          echo 'END_GO_SUM'
       - run: go test ./...
       - run: go vet ./...
       - run: go build -o "$RUNNER_TEMP/go-rsos-comparator" .
