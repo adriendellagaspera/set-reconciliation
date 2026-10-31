@@ -73,14 +73,14 @@ fn value(index: u64, version: u8) -> u64 {
     }
 }
 
-fn make_stores(
-    case: &Case,
-) -> (
+type StorePair = (
     FingerprintTreeMap<[u8; 16], u64>,
     FingerprintTreeMap<[u8; 16], u64>,
     Vec<Element>,
     Vec<Element>,
-) {
+);
+
+fn make_stores(case: &Case) -> StorePair {
     let mut left = FingerprintTreeMap::new();
     let mut right = FingerprintTreeMap::new();
     let mut expected_left = Vec::new();
